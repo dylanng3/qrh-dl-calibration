@@ -1,0 +1,14 @@
+.venv/
+venv/
+ENV/
+.env/
+*.env
+__pycache__/
+*.pyc
+.DS_Store
+.ipynb_checkpoints/
+# VSCode
+.vscode/
+data/
+experiments/
+
