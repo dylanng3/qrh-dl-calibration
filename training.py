@@ -1,54 +1,84 @@
 #!/usr/bin/env python3
 """
-training.py
-===========
-QRH training script with support for both NPZ and modular X,y formats.
+train_advanced.py
+================
+Training script for advanced QRH mo        from advanced_model_architectures import (
+            build_resmlp_pca_model,
+            fit_pca_components,
+            pca_transform_targets,
+            pca_inverse_transform,
+            evaluate_by_buckets,
+            create_training_callbacks
+        )h PCA-head, Residual blocks, and Sobolev regularization
 
 Usage:
-    python training.py --data_size 0k --epochs 50 --format modular
-    python training.py --data_size 5k --epochs 100 --format npz
+    python train_advanced.py --data_size 100k --epochs 200 --format modular
+    python train_advanced.py --data_size 100k --epochs 200 --format modular --test_run
 """
 
 import argparse
 import sys
 import os
 from pathlib import Path
+import numpy as np
+import pickle
 
 def main():
-    """Main training function with format selection."""
-    parser = argparse.ArgumentParser(description="QRH Model Training")
+    """Main training function for advanced QRH model."""
+    parser = argparse.ArgumentParser(description="Advanced QRH Model Training")
     
     # Data arguments
     parser.add_argument("--data_size", type=str, required=True,
-                        choices=["0k", "5k", "150k"],
-                        help="Dataset size to use")
-    parser.add_argument("--format", type=str, default="auto",
-                        choices=["npz", "modular", "auto"],
-                        help="Data format: npz (train_0k.npz) or modular (train_X.npy)")
-    parser.add_argument("--epochs", type=int, default=100,
+                        help="Dataset size to use (e.g., 0k, 5k, 100k, 150k, ...)")
+    parser.add_argument("--format", type=str, default="modular",
+                        choices=["npz", "modular"], 
+                        help="Data format: npz or modular (default: modular)")
+    parser.add_argument("--epochs", type=int, default=200,
                         help="Number of training epochs")
-    parser.add_argument("--batch_size", type=int, default=128,
+    parser.add_argument("--batch_size", type=int, default=256,
                         help="Batch size for training")
-    parser.add_argument("--learning_rate", type=float, default=0.001,
+    parser.add_argument("--learning_rate", type=float, default=1e-3,
                         help="Learning rate")
     parser.add_argument("--patience", type=int, default=10,
                         help="Early stopping patience")
-    parser.add_argument("--model_name", type=str, default="qrh_model",
+    parser.add_argument("--model_name", type=str, default="qrh_advanced",
                         help="Model name for saving")
     parser.add_argument("--test_run", action="store_true",
                         help="Quick test with reduced epochs")
+    
+    # Advanced model parameters
+    parser.add_argument("--pca_components", type=int, default=12,
+                        help="Number of PCA components (K)")
+    parser.add_argument("--width", type=int, default=128,
+                        help="Hidden layer width")
+    parser.add_argument("--n_blocks", type=int, default=8,
+                        help="Number of residual blocks")
+    parser.add_argument("--dropout_rate", type=float, default=0.0,
+                        help="Dropout rate")
+    parser.add_argument("--l2_reg", type=float, default=1e-5,
+                        help="L2 regularization strength")
+    
+    # Loss function parameters
+    parser.add_argument("--huber_delta", type=float, default=0.015,
+                        help="Huber loss threshold")
+    parser.add_argument("--sobolev_alpha", type=float, default=0.1,
+                        help="Strike smoothness weight")
+    parser.add_argument("--sobolev_beta", type=float, default=0.05,
+                        help="Maturity smoothness weight")
     
     args = parser.parse_args()
     
     # Construct data directory path
     data_dir = f"data/raw/data_{args.data_size}"
     
-    print("🚀 Starting QRH Training...")
+    print("Starting Advanced QRH Training...")
     print(f"Dataset: {data_dir}")
     print(f"Format: {args.format}")
     print(f"Epochs: {args.epochs}")
     print(f"Batch size: {args.batch_size}")
     print(f"Learning rate: {args.learning_rate}")
+    print(f"PCA components: {args.pca_components}")
+    print(f"Architecture: {args.n_blocks} residual blocks × {args.width} units")
     if args.test_run:
         print("Mode: TEST RUN")
     
@@ -61,42 +91,35 @@ def main():
     
     # Import after setting path
     try:
-        print("📦 Importing dependencies...")
-        import numpy as np
-        print("  ✅ numpy")
-        
+        print("Importing dependencies...")
         import tensorflow as tf
-        print("  ✅ tensorflow")
+        print("  tensorflow")
         
         # Suppress TensorFlow warnings
         tf.get_logger().setLevel('ERROR')
         os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
         
         import keras
-        print("  ✅ keras")
+        print("  keras")
         
-        from modeling.model_architectures import create_qrh_model, compile_qrh_model
-        print("  ✅ model_architectures")
-        
-        from modeling.training_utils_qrh import (
-            get_qrh_training_config,
-            load_qrh_dataset,
-            load_qrh_modular_dataset,
-            train_qrh_model,
-            train_qrh_modular_model,
-            evaluate_qrh_model,
-            create_experiment_dir
+        from src.model_architectures import (
+            build_resmlp_pca_model,
+            fit_pca_components,
+            pca_transform_targets,
+            pca_inverse_transform,
+            evaluate_by_buckets,
+            create_training_callbacks
         )
-        print("  ✅ training_utils_qrh")
+        print("  advanced_model_architectures")
         
     except ImportError as e:
-        print(f"❌ Import error: {e}")
+        print(f"Import error: {e}")
         return 1
     
     # Check if dataset exists
     data_path = Path(data_dir)
     if not data_path.exists():
-        print(f"❌ Dataset directory not found: {data_dir}")
+        print(f"Dataset directory not found: {data_dir}")
         print("Available datasets:")
         raw_dir = Path("data/raw")
         if raw_dir.exists():
@@ -104,185 +127,276 @@ def main():
                 print(f"  - {d.name}")
         return 1
     
-    # Auto-detect or verify format
-    format_type = args.format
-    if format_type == "auto":
-        # Check which format is available
-        modular_files = ["train_X.npy", "train_y.npy", "val_X.npy", "val_y.npy"]
-        npz_files = [f"train_{args.data_size}.npz", f"test_{args.data_size}.npz", f"val_{args.data_size}.npz"]
-        
-        has_modular = all((data_path / f).exists() for f in modular_files)
-        has_npz = all((data_path / f).exists() for f in npz_files)
-        
-        if has_modular:
-            format_type = "modular"
-            print(f"✓ Auto-detected modular format")
-        elif has_npz:
-            format_type = "npz"
-            print(f"✓ Auto-detected NPZ format")
-        else:
-            print(f"❌ No recognized format found in {data_dir}")
-            print("Available files:", list(f.name for f in data_path.glob("*")))
-            return 1
-    
-    print(f"📊 Using format: {format_type}")
-    
-    # Create experiment directory
+    # Load dataset
+    print("Loading dataset...")
     try:
-        exp_dir = create_experiment_dir("experiments")
-        print(f"📁 Experiment directory: {exp_dir}")
-    except Exception as e:
-        print(f"❌ Failed to create experiment directory: {e}")
-        return 1
-    
-    # Get configuration
-    config = get_qrh_training_config()
-    
-    # Override with command line arguments
-    epochs = min(10, args.epochs) if args.test_run else args.epochs
-    config.update({
-        "epochs": epochs,
-        "batch_size": args.batch_size,
-        "learning_rate": args.learning_rate,
-        "early_stopping_patience": args.patience,
-        "data_dir": data_dir,
-        "dataset_size": args.data_size,
-        "model_name": args.model_name
-    })
-    
-    print(f"⚙️  Training configuration:")
-    print(f"  - Dataset size: {args.data_size}")
-    print(f"  - Format: {format_type}")
-    print(f"  - Epochs: {config['epochs']}")
-    print(f"  - Batch size: {config['batch_size']}")
-    print(f"  - Learning rate: {config['learning_rate']}")
-    print(f"  - Early stopping patience: {config['early_stopping_patience']}")
-    
-    # Load dataset based on format
-    print("📂 Loading dataset...")
-    try:
-        if format_type == "modular":
-            train_data, val_data, scalers = load_qrh_modular_dataset(data_dir)
-            test_data = None  # No separate test set in modular format
-        else:  # npz format
-            train_data, val_data, test_data, scalers = load_qrh_dataset(data_dir, args.data_size)
+        if args.format == "modular":
+            # Load modular format
+            X_train = np.load(data_path / "train_X.npy")
+            y_train = np.load(data_path / "train_y.npy")
+            X_val = np.load(data_path / "val_X.npy")  
+            y_val = np.load(data_path / "val_y.npy")
+            
+            # Load scalers
+            with open(data_path / "x_scaler.pkl", 'rb') as f:
+                x_scaler = pickle.load(f)
+            with open(data_path / "y_scaler.pkl", 'rb') as f:
+                y_scaler = pickle.load(f)
+                
+        else:  # NPZ format
+            train_data = np.load(data_path / f"train_{args.data_size}.npz")
+            val_data = np.load(data_path / f"val_{args.data_size}.npz") 
+            
+            X_train, y_train = train_data['X'], train_data['y']
+            X_val, y_val = val_data['X'], val_data['y']
+            
+            # Load scalers  
+            with open(data_path / "x_scaler.pkl", 'rb') as f:
+                x_scaler = pickle.load(f)
+            with open(data_path / "y_scaler.pkl", 'rb') as f:
+                y_scaler = pickle.load(f)
         
-        print(f"  ✅ Train samples: {len(train_data[0])}")
-        print(f"  ✅ Val samples: {len(val_data[0])}")
-        if test_data:
-            print(f"  ✅ Test samples: {len(test_data[0])}")
+        print(f"  Train samples: {len(X_train)}")
+        print(f"  Val samples: {len(X_val)}")
+        print(f"  Input dimensions: {X_train.shape[1]}")
+        print(f"  Output dimensions: {y_train.shape[1]}")
             
     except Exception as e:
-        print(f"❌ Failed to load dataset: {e}")
+        print(f"Failed to load dataset: {e}")
         return 1
     
-    # Create model
-    print("🧠 Creating model...")
+    # Get raw (unscaled) y data for PCA fitting
+    print("Preparing data for PCA...")
     try:
-        model = create_qrh_model("qrh_mlp")
-        model = compile_qrh_model(model, learning_rate=config["learning_rate"])
+        y_train_raw = y_scaler.inverse_transform(y_train)
+        y_val_raw = y_scaler.inverse_transform(y_val)
+        print(f"  Raw IV range: [{y_train_raw.min():.4f}, {y_train_raw.max():.4f}]")
+    except Exception as e:
+        print(f"Failed to prepare raw data: {e}")
+        return 1
+    
+    # Model parameters
+    model_params = {
+        'K': args.pca_components,
+        'width': args.width,
+        'n_blocks': args.n_blocks,
+        'neck_width': 64,
+        'dropout_rate': args.dropout_rate,
+        'l2_reg': args.l2_reg
+    }
+    
+    # PCA parameters  
+    pca_params = {
+        'K': args.pca_components,
+        'use_scaler': True
+    }
+    
+    # Loss parameters
+    loss_params = {
+        'delta': args.huber_delta,
+        'alpha': args.sobolev_alpha,
+        'beta': args.sobolev_beta,
+        'grid_shape': (4, 15)  # Standard QRH IV surface grid
+    }
+    
+    # Build and compile model (using simple MSE for PCA coefficients)
+    print("Building advanced QRH model...")
+    try:
+        # Build model architecture
+        model_params = {
+            'K': args.pca_components,
+            'width': args.width,
+            'n_blocks': args.n_blocks,
+            'neck_width': 64,
+            'dropout_rate': args.dropout_rate,
+            'l2_reg': args.l2_reg
+        }
+        
+        # Fit PCA components first
+        pca_info = fit_pca_components(y_train_raw, K=args.pca_components, use_scaler=True)
+        print(f"  PCA explained variance: {pca_info['total_explained']:.4f}")
+        
+        # Build model
+        model = build_resmlp_pca_model(
+            input_dim=X_train.shape[1],
+            **model_params
+        )
+        
+        # Simple compilation with MSE loss for PCA coefficients  
+        model.compile(
+            optimizer=keras.optimizers.Adam(learning_rate=args.learning_rate),
+            loss='mse',  # Simple MSE for PCA coefficients
+            metrics=['mae']
+        )
         
         total_params = model.count_params()
-        print(f"  ✅ Model created with {total_params:,} parameters")
+        print(f"  Model created with {total_params:,} parameters")
+        print(f"  PCA components: {pca_info['K']} (explains {pca_info['total_explained']:.3f} variance)")
         
     except Exception as e:
-        print(f"❌ Failed to create model: {e}")
+        print(f"Failed to create model: {e}")
         return 1
     
-    # Setup paths
-    model_save_path = Path(exp_dir) / f"{args.model_name}_{args.data_size}.keras"
-    log_dir = Path(exp_dir) / "logs"
+    # Transform targets to PCA space
+    print("Transforming targets to PCA coefficient space...")  
+    try:
+        y_train_pca = pca_transform_targets(y_train_raw, pca_info)
+        y_val_pca = pca_transform_targets(y_val_raw, pca_info)
+        
+        print(f"  PCA coefficients shape: train{y_train_pca.shape}, val{y_val_pca.shape}")
+        print(f"  PCA explained variance: {pca_info['total_explained']:.4f}")
+        
+    except Exception as e:
+        print(f"Failed to transform targets: {e}")
+        return 1
     
-    print(f"💾 Model will be saved to: {model_save_path}")
+    # Create experiment directory
+    exp_dir = Path("experiments") / f"advanced_qrh_{args.data_size}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Experiment directory: {exp_dir}")
+    
+    # Setup model saving
+    model_save_path = exp_dir / f"{args.model_name}_{args.data_size}.keras"
+    
+    # Training configuration
+    epochs = min(10, args.epochs) if args.test_run else args.epochs
+    
+    print(f"Training configuration:")
+    print(f"  - Dataset size: {args.data_size}")
+    print(f"  - Format: {args.format}")
+    print(f"  - Epochs: {epochs}")
+    print(f"  - Batch size: {args.batch_size}")
+    print(f"  - Learning rate: {args.learning_rate}")
+    print(f"  - PCA components: {args.pca_components}")
+    print(f"  - Huber delta: {args.huber_delta}")
+    print(f"  - Sobolev weights: α={args.sobolev_alpha}, β={args.sobolev_beta}")
+    
+    # Create callbacks
+    callbacks = create_training_callbacks(
+        patience=args.patience,
+        reduce_lr_patience=5,
+        min_lr=1e-6,
+        factor=0.5
+    )
+    
+    # Add model checkpoint callback
+    callbacks.append(
+        keras.callbacks.ModelCheckpoint(
+            str(model_save_path),
+            monitor='val_loss',
+            save_best_only=True,
+            verbose=1
+        )
+    )
     
     # Train model
-    print("🏋️  Starting training...")
+    print("Starting training...")
     try:
-        if format_type == "modular":
-            history = train_qrh_modular_model(
-                model=model,
-                train_data=train_data,
-                val_data=val_data,
-                config=config,
-                model_save_path=str(model_save_path),
-                log_dir=str(log_dir),
-                verbose=1
-            )
-        else:  # npz format
-            history = train_qrh_model(
-                model=model,
-                data=(train_data, val_data),
-                config=config,
-                model_save_path=str(model_save_path),
-                log_dir=str(log_dir),
-                verbose=1
-            )
+        history = model.fit(
+            X_train, y_train_pca,  # Note: using PCA coefficients as targets
+            batch_size=args.batch_size,
+            epochs=epochs,
+            validation_data=(X_val, y_val_pca),
+            callbacks=callbacks,
+            verbose=2
+        )
         
-        print("✅ Training completed!")
+        print("Training completed!")
         
         # Get final metrics
         final_loss = min(history.history.get('val_loss', []))
-        print(f"📈 Final validation loss: {final_loss:.6f}")
-        
-        # Load best model for evaluation
-        print("🔄 Loading best model for evaluation...")
-        best_model = keras.models.load_model(str(model_save_path))
-        
-        # Evaluation
-        x_scaler, y_scaler = scalers
-        if test_data:
-            # NPZ format has separate test set
-            print("🧪 Evaluating on test set...")
-            metrics = evaluate_qrh_model(
-                model=best_model,
-                test_data=test_data,
-                y_scaler=y_scaler,
-                verbose=1
-            )
-        else:
-            # Modular format - evaluate on validation set
-            print("🧪 Evaluating on validation set...")
-            metrics = evaluate_qrh_model(
-                model=best_model,
-                test_data=val_data,
-                y_scaler=y_scaler,
-                verbose=1
-            )
-        
-        print(f"📊 Final Results:")
-        print(f"  - R² score: {metrics['r2_score']:.6f}")
-        print(f"  - RMSE (original): {metrics['rmse_original']:.6f}")
-        print(f"  - MAE (original): {metrics['mae_original']:.6f}")
-        print(f"  - Training epochs: {len(history.history.get('loss', []))}")
-        print(f"  - Model parameters: {total_params:,}")
-        
-        # Save training summary
-        summary_path = Path(exp_dir) / "training_summary.txt"
-        with open(summary_path, 'w') as f:
-            f.write(f"QRH Production Training Summary\\n")
-            f.write(f"================================\\n")
-            f.write(f"Dataset: {data_dir}\\n")
-            f.write(f"Dataset size: {args.data_size}\\n")
-            f.write(f"Model parameters: {total_params:,}\\n")
-            f.write(f"Training epochs: {len(history.history.get('loss', []))}\\n")
-            f.write(f"Batch size: {config['batch_size']}\\n")
-            f.write(f"Learning rate: {config['learning_rate']}\\n")
-            f.write(f"Final validation loss: {final_loss:.6f}\\n")
-            f.write(f"Test R² score: {metrics['r2_score']:.6f}\\n")
-            f.write(f"Test RMSE: {metrics['rmse_original']:.6f}\\n")
-            f.write(f"Test MAE: {metrics['mae_original']:.6f}\\n")
-        
-        print(f"📄 Summary saved to: {summary_path}")
-        
-        return 0
+        print(f"Final validation loss: {final_loss:.6f}")
         
     except Exception as e:
-        print(f"❌ Training failed: {e}")
+        print(f"Training failed: {e}")
         import traceback
         traceback.print_exc()
         return 1
+    
+    # Load best model for evaluation
+    print("Loading best model for evaluation...")
+    best_model = keras.models.load_model(str(model_save_path))
+    
+    # Evaluation
+    print("Evaluating model...")
+    try:
+        # Predict PCA coefficients
+        y_val_pred_pca = best_model.predict(X_val)
+        
+        # Reconstruct IV surface
+        y_val_pred_raw = pca_inverse_transform(y_val_pred_pca, pca_info)
+        
+        # Overall metrics (in original IV space)
+        mse_original = np.mean((y_val_pred_raw - y_val_raw) ** 2)
+        mae_original = np.mean(np.abs(y_val_pred_raw - y_val_raw))
+        rmse_original = np.sqrt(mse_original)
+        
+        # R² score
+        ss_res = np.sum((y_val_raw - y_val_pred_raw) ** 2)
+        ss_tot = np.sum((y_val_raw - np.mean(y_val_raw)) ** 2)  
+        r2_score = 1 - (ss_res / ss_tot)
+
+        print(f"QRH Model Evaluation Results:")
+        print(f"  Val samples: {len(y_val_raw):,}")
+        print(f"  MSE (original): {mse_original:.6f}")
+        print(f"  MAE (original): {mae_original:.6f}")
+        print(f"  RMSE (original): {rmse_original:.6f}")
+        print(f"  R² score: {r2_score:.6f}")
+        
+        # Bucket-wise evaluation
+        print("\nBucket-wise RMSE:")
+        bucket_rmse = evaluate_by_buckets(y_val_raw, y_val_pred_raw)
+        for bucket, rmse_val in bucket_rmse.items():
+            print(f"  {bucket}: {rmse_val:.6f}")
+            
+    except Exception as e:
+        print(f"Evaluation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+    
+    print(f"Final Results:")
+    print(f"  - R² score: {r2_score:.6f}")
+    print(f"  - RMSE (original): {rmse_original:.6f}")
+    print(f"  - MAE (original): {mae_original:.6f}")
+    print(f"  - Training epochs: {len(history.history.get('loss', []))}")
+    print(f"  - Model parameters: {total_params:,}")
+    print(f"  - PCA components: {pca_info['K']} (explains {pca_info['total_explained']:.3f})")
+    
+    # Save training summary
+    summary_path = exp_dir / "training_summary.txt"
+    with open(summary_path, 'w') as f:
+        f.write(f"QRH Training Summary\n")
+        f.write(f"============================\n")
+        f.write(f"Dataset: {data_dir}\n")
+        f.write(f"Dataset size: {args.data_size}\n")
+        f.write(f"Model parameters: {total_params:,}\n")
+        f.write(f"Training epochs: {len(history.history.get('loss', []))}\n")
+        f.write(f"Batch size: {args.batch_size}\n")
+        f.write(f"Learning rate: {args.learning_rate}\n")
+        f.write(f"PCA components: {pca_info['K']}\n")
+        f.write(f"PCA explained variance: {pca_info['total_explained']:.6f}\n")
+        f.write(f"Architecture: {args.n_blocks} ResBlocks × {args.width} units\n")
+        f.write(f"Final validation loss: {final_loss:.6f}\n")
+        f.write(f"Test R² score: {r2_score:.6f}\n")
+        f.write(f"Test RMSE: {rmse_original:.6f}\n")
+        f.write(f"Test MAE: {mae_original:.6f}\n")
+        f.write(f"\nBucket-wise RMSE:\n")
+        for bucket, rmse_val in bucket_rmse.items():
+            f.write(f"  {bucket}: {rmse_val:.6f}\n")
+    
+    # Save PCA info
+    pca_info_path = exp_dir / "pca_info.pkl"
+    with open(pca_info_path, 'wb') as f:
+        pickle.dump(pca_info, f)
+    
+    print(f"Summary saved to: {summary_path}")
+    print(f"PCA info saved to: {pca_info_path}")
+    
+    return 0
 
 
 if __name__ == "__main__":
+    import pandas as pd  # for timestamp
     exit_code = main()
     sys.exit(exit_code)

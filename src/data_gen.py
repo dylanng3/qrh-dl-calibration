@@ -26,7 +26,7 @@ data/raw/data_XXXk/
 ├── test_XXXk.npz      # Test data (20%) 
 ├── val_XXXk.npz       # Validation data (10%)
 ├── preview_XXXk.csv   # First 1000 samples preview
-├── x_scaler.pkl       # Input features scaler (ω, z₀)
+├── x_scaler.pkl       # Input features scaler (ω, z0)
 └── y_scaler.pkl       # Output IVS scaler
 
 Dependencies
@@ -34,12 +34,12 @@ Dependencies
 - numpy, scipy, scikit‑learn, joblib, tqdm
 - Black-Scholes implied volatility solver
 """
-from __future__ import annotations # Enables postponed evaluation of type annotations for forward references
+from __future__ import annotations
 
 import argparse
 import pickle
 from pathlib import Path
-
+ 
 import numpy as np
 from joblib import Parallel, delayed
 from scipy.stats import qmc, norm
@@ -47,11 +47,31 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from tqdm import tqdm
 
+# GPU acceleration imports
+try:
+    import cupy as cp
+    GPU_AVAILABLE = True
+    print("🚀 CuPy detected - GPU acceleration enabled")
+    
+    def to_numpy(arr):
+        """Convert CuPy array to numpy array"""
+        return cp.asnumpy(arr)
+        
+except ImportError:
+    cp = np  # Fallback to numpy if CuPy not available
+    GPU_AVAILABLE = False
+    print("⚠️  CuPy not found - falling back to CPU (numpy)")
+    
+    def to_numpy(arr):
+        """Identity function for numpy arrays"""
+        return arr
+
+import time
+
 # --- Import Black-Scholes utilities ----------------------------------------
 from scipy.optimize import brentq
 
-# ---------------------------------------------------------------------------
-# Parameter ranges for Quadratic Rough Heston model ------------------------
+# Parameter ranges for Quadratic Rough Heston model:
 # ω = (λ, η, a, b, c) - 5 main model parameters  
 # z₀ = (z₀₁, ..., z₀₁₀) - 10 initial factor values from multi-factor approximation
 PARAM_RANGES = {
@@ -62,16 +82,31 @@ PARAM_RANGES = {
     "b": (0.01, 0.5),          # b ∈ [0.01, 0.5]
     "c": (0.0001, 0.03),       # c ∈ [0.0001, 0.03]
     # Initial factor values z₀
-    "z0": (-0.5, 0.5),         # z₀ᵢ ∈ [-0.5, 0.5] for i=1,...,10
+    "z0": (-0.5, 0.5),         # z0i ∈ [-0.5, 0.5] for i=1,...,10
 }
 
 # Fixed grid for implied volatility surface
-LOG_MONEYNESS = np.linspace(-0.3, 0.3, 15)  # 15 log-moneyness points k = log(K/S₀)
-MATURITIES = np.array([0.25, 0.5, 1.0, 2.0])  # 4 maturities τ (quarterly, semi-annual, 1Y, 2Y)
-S0 = 100.0  # Fixed spot price
-R = 0.03    # Fixed risk-free rate
+MATURITIES = [0.25, 0.5, 1.0, 2.0]  # T ∈ {0.25, 0.5, 1, 2} years
+LOG_MONEYNESS = np.linspace(-0.5, 0.5, 15)  # k ∈ [-0.5, 0.5], 15 points
 
-# ---------------------------------------------------------------------------
+# Global constants for QRH model
+RISK_FREE_RATE = 0.05  # Single source of truth for r
+S0 = 100.0  # Initial spot price
+
+# Factor-specific parameters for multi-factor approximation
+# Separate roles: aggregation weights vs diffusion coefficients
+GAMMA_FACTORS = np.array([0.08, 0.12, 0.10, 0.15, 0.09, 0.11, 0.13, 0.07, 0.14, 0.06])  # γi mean-reversion rates
+
+# Aggregation weights: cᵢ for Z_t = Σᵢ cᵢ * Y^(i) (kernel approximation)
+C_FACTORS = np.array([0.25, 0.35, 0.30, 0.40, 0.28, 0.32, 0.38, 0.22, 0.42, 0.20])      # ci aggregation weights
+
+# Leverage effect: correlation between stock price and volatility factors
+# For equity indices (SPX, STOXX, etc.), ρ should be strongly negative
+# Industry standard for equity: ρ ∈ [-0.9, -0.4], typical around -0.7
+LEVERAGE_CORRELATION = -0.7  # Baseline for equity indices
+LEVERAGE_RANGE = (-0.9, -0.4)  # Range for data generation if using random sampling
+USE_RANDOM_LEVERAGE = False  # Set True for production robustness, False for research baseline
+
 # Black-Scholes utilities ---------------------------------------------------
 
 def black_scholes_call(S, K, T, r, sigma):
@@ -99,7 +134,6 @@ def implied_volatility(price, S, K, T, r, tol=1e-6, max_iter=100):
     except (ValueError, RuntimeError):
         return 0.0
 
-# ---------------------------------------------------------------------------
 # Sampling helper -----------------------------------------------------------
 
 def sample_params(n: int, sobol_seed: int | None) -> list[dict[str, float | np.ndarray]]:
@@ -154,63 +188,195 @@ def sample_params(n: int, sobol_seed: int | None) -> list[dict[str, float | np.n
     
     return params
 
-# ---------------------------------------------------------------------------
 # Path simulation for Quadratic Rough Heston --------------------------------
 
-def simulate_qrh_paths(params, n_paths=50000, n_steps=252, T_max=2.0):
+def simulate_qrh_paths(params, n_paths=30000, n_steps=252, T_max=2.0, use_gpu=None, leverage_rho=None):
     """
-    Simulate paths for Quadratic Rough Heston model using explicit-implicit Euler scheme.
-    Returns final index values for option pricing.
+    Simulate Quadratic Rough Heston model paths using Monte Carlo with GPU acceleration.
+    
+    Mathematical Formulation:
+    ========================
+    Stock Price SDE:
+        dS_t = r S_t dt + √V_t S_t dB_S
+    
+    Variance Process:
+        V_t = λ + a(Z_t - b)² + c
+        where Z_t = Σᵢ cᵢ * Y^(i)_t  (multi-factor aggregation)
+    
+    Factor SDEs (with drift coupling):
+        dY^(i)_t = (-γᵢ Y^(i)_t - λ Z_t) dt + η √V_t dB_v
+    
+    Correlation Structure:
+        dB_S = √dt * u
+        dB_v = √dt * (ρ u + √(1-ρ²) v)
+        where u, v ~ N(0,1) independent, ρ = leverage correlation
+    
+    Parameters:
+    ===========
+    params : dict
+        - 'lambda' : float, variance level parameter λ
+        - 'eta' : float, diffusion coefficient η  
+        - 'a' : float, quadratic coefficient a
+        - 'b' : float, centering parameter b
+        - 'c' : float, linear coefficient c
+        - 'z0' : array(10), initial factor values [z₀₁, ..., z₀₁₀]
+    
+    n_paths : int, default=30000
+        Number of Monte Carlo simulation paths
+    
+    n_steps : int, default=252  
+        Number of time discretization steps (252 = trading days/year)
+    
+    T_max : float, default=2.0
+        Maximum simulation time in years
+    
+    use_gpu : bool or None, default=None
+        - True: Force GPU usage (requires CuPy)
+        - False: Force CPU usage
+        - None: Auto-detect (GPU if available, CPU fallback)
+    
+    leverage_rho : float or None, default=None
+        Override leverage correlation ρ ∈ [-1,1]
+        If None, uses global LEVERAGE_CORRELATION = -0.7
+    
+    Returns:
+    ========
+    dict
+        Simulated stock prices at fixed maturities:
+        - 'T_0.25' : array(n_paths), prices at T=0.25 years
+        - 'T_0.5'  : array(n_paths), prices at T=0.5 years  
+        - 'T_1.0'  : array(n_paths), prices at T=1.0 years
+        - 'T_2.0'  : array(n_paths), prices at T=2.0 years
+    
+    Notes:
+    ======
+    - Uses explicit Euler-Maruyama scheme for SDE discretization
+    - Automatically captures snapshots at exact maturity times
+    - GPU acceleration via CuPy (if available) for 10x+ speedup
+    - Reproducible results via fixed random seeds (CPU: np.random.seed, GPU: cp.random.seed)
+    - Risk-free rate r = 0.05, initial spot S₀ = 100 (global constants)
     """
+    # Determine GPU usage
+    if use_gpu is None:
+        use_gpu = GPU_AVAILABLE
+    elif use_gpu and not GPU_AVAILABLE:
+        print("GPU requested but CuPy not available, falling back to CPU")
+        use_gpu = False
+    
+    # Use appropriate library (optimized for performance)
+    xp = cp if use_gpu else np
+    
+    # Set random seed for reproducibility
+    if use_gpu:
+        cp.random.seed(42)  # GPU seeding
+    else:
+        np.random.seed(42)  # CPU seeding
+    
+    # Start timing
+    start_time = time.time()
+    
+    # Extract parameters (use float32 for GPU efficiency)
+    lambda_ = float(params["lambda"])
+    eta = float(params["eta"]) 
+    a = float(params["a"])
+    b = float(params["b"])
+    c = float(params["c"])
+    z0 = xp.array(params["z0"], dtype=xp.float32)  # Shape: (10,)
+    
+    # Fixed parameters
+    r = RISK_FREE_RATE  # Use global constant
+    S0_local = S0  # Initial spot price
+    
+    # Convert factor-specific parameters to GPU if needed
+    gamma_factors = xp.array(GAMMA_FACTORS, dtype=xp.float32)  # γᵢ: mean-reversion rates
+    c_factors = xp.array(C_FACTORS, dtype=xp.float32)          # cᵢ: aggregation weights
+    
+    # Determine leverage correlation to use
+    if leverage_rho is not None:
+        current_rho = leverage_rho  # Override provided
+    elif USE_RANDOM_LEVERAGE:
+        current_rho = np.random.uniform(LEVERAGE_RANGE[0], LEVERAGE_RANGE[1])  # Random sampling
+    else:
+        current_rho = LEVERAGE_CORRELATION  # Fixed baseline
+    
     dt = T_max / n_steps
-    sqrt_dt = np.sqrt(dt)
+    sqrt_dt = xp.sqrt(dt)
     
-    # Extract parameters
-    lambda_val = params["lambda"]
-    eta = params["eta"] 
-    a = params["a"]
-    b = params["b"]
-    c = params["c"]
-    z0 = params["z0"]
+    # Maturity times to capture (no pre-computed indices to avoid off-by-one errors)
+    maturities = [0.25, 0.5, 1.0, 2.0]  # T ∈ {0.25, 0.5, 1, 2}
     
-    # Initialize paths
-    S = np.full(n_paths, S0)  # Index price paths
-    Z = np.tile(z0, (n_paths, 1))  # Multi-factor approximation state (n_paths x 10)
+    # Initialize arrays on GPU with optimal dtype
+    S = xp.full(n_paths, S0_local, dtype=xp.float32)  # Index price paths
+    Z = xp.tile(z0, (n_paths, 1))  # Multi-factor approximation state (n_paths x 10)
     
-    # Store paths at maturity times for option pricing
-    paths_at_maturities = {}
-    current_step = 0
+    # Store results at maturities
+    results = {}
     
-    for T in MATURITIES:
-        steps_to_T = int(T / dt)
+    # Time stepping loop
+    for step in range(n_steps):
+        t = step * dt
+        t_next = (step + 1) * dt
         
-        # Simulate from current_step to steps_to_T
-        for step in range(current_step, steps_to_T):
-            # Generate random increments
-            dW_S = np.random.normal(0, sqrt_dt, n_paths)
-            dW_Z = np.random.normal(0, sqrt_dt, (n_paths, 10))
+        if step < n_steps - 1:  # Don't evolve after last maturity
+            # Generate 2 independent standard normal random variables (Heston style)
+            u = xp.random.normal(0, 1, n_paths).astype(xp.float32)  # For stock price
+            v = xp.random.normal(0, 1, n_paths).astype(xp.float32)  # For volatility
             
-            # Simplified QRH dynamics (placeholder for actual scheme)
-            # In practice, this would implement the explicit-implicit Euler scheme
-            # from the paper's Appendix A.1
+            # Construct correlated Brownian increments (standard Heston approach)
+            dB_S = sqrt_dt * u
+            dB_v = sqrt_dt * (current_rho * u + xp.sqrt(1 - current_rho * current_rho) * v)
             
-            # Variance process (simplified)
-            V_t = np.maximum(np.sum(Z**2, axis=1), 1e-6)
+            # Compute volatility from multi-factor approximation (QRH specification)
+            # Step 1: Compute aggregate factor using AGGREGATION WEIGHTS cᵢ
+            # Zt = Σᵢ cᵢ * Y^(i) (kernel approximation weights)
+            Z_aggregate = xp.sum(c_factors.reshape(1, -1) * Z, axis=1)  # Shape: (n_paths,)
             
-            # Index process update
-            drift = R * dt
-            diffusion = np.sqrt(V_t) * dW_S
-            S *= np.exp(drift - 0.5 * V_t * dt + diffusion)
+            # Step 2: QRH variance formula - Centered form: V = a(Z-b)² + c
+            # Alternative to a + bZ + cZ²: both are quadratic but centered form more natural
+            Z_centered = Z_aggregate - b  # Center around b
+            V_raw = a * Z_centered * Z_centered + c  # a(Z-b)² + c
+            V = lambda_ + xp.maximum(V_raw, 0.0)  # Apply shift and positivity  
+            V = xp.maximum(V, 1e-8)  # Numerical stability floor
             
-            # Multi-factor process update (simplified)
-            for i in range(10):
-                Z[:, i] += (-lambda_val * Z[:, i] * dt + 
-                           eta * np.sqrt(np.maximum(V_t, 1e-6)) * dW_Z[:, i])
+            # Update stock price (vectorized exp operation)
+            log_return = (r - 0.5 * V) * dt + xp.sqrt(V) * dB_S
+            S *= xp.exp(log_return)
+            
+            # Update Z factors with correct SDE
+            # dZ^(i) = (-γᵢ Z^(i) - λ Zt) dt + η √Vt dB_v  [Proper formulation]
+            drift_factor = -gamma_factors.reshape(1, -1) * Z  # -γᵢ Z^(i) term
+            drift_coupling = -lambda_ * Z_aggregate.reshape(-1, 1)  # -λ Zt coupling (same for all factors)
+            drift_Z = (drift_factor + drift_coupling) * dt  # Combined drift
+            
+            # Diffusion: η √Vt dB_v (common scaling by √Vt, not individual dᵢ)
+            diffusion_Z = (eta * xp.sqrt(V) * dB_v).reshape(-1, 1)  # Common √Vt scaling
+            Z += drift_Z + diffusion_Z
         
-        paths_at_maturities[T] = S.copy()
-        current_step = steps_to_T
+        # Check if any maturity times match current time (after evolution step)
+        for T_maturity in maturities:
+            if abs(t_next - T_maturity) < 1e-6:  # Floating point tolerance
+                # Store paths at this maturity
+                if GPU_AVAILABLE and isinstance(S, cp.ndarray):
+                    results[f"T_{T_maturity}"] = to_numpy(S.copy())
+                else:
+                    results[f"T_{T_maturity}"] = np.array(S.copy())
     
-    return paths_at_maturities
+    # Ensure all maturities are captured (final check)
+    for T_maturity in maturities:
+        if f"T_{T_maturity}" not in results:
+            # Use final state if maturity was missed
+            if GPU_AVAILABLE and isinstance(S, cp.ndarray):
+                results[f"T_{T_maturity}"] = to_numpy(S.copy())
+            else:
+                results[f"T_{T_maturity}"] = np.array(S.copy())
+    
+    # Timing info
+    elapsed = time.time() - start_time
+    device = "GPU" if use_gpu else "CPU"
+    if elapsed > 1.0:  # Only print for slow operations
+        print(f"  📊 Simulated {n_paths:,} paths on {device} in {elapsed:.2f}s")
+    
+    return results
 
 def compute_option_prices_mc(paths_at_maturities):
     """
@@ -223,17 +389,22 @@ def compute_option_prices_mc(paths_at_maturities):
         K = S0 * np.exp(k)  # Strike from log-moneyness
         
         for j, T in enumerate(MATURITIES):
-            S_T = paths_at_maturities[T]
-            payoffs = np.maximum(S_T - K, 0)
-            discounted_payoff = np.exp(-R * T) * np.mean(payoffs)
-            option_prices[i, j] = discounted_payoff
+            T_key = f"T_{T}"
+            if T_key in paths_at_maturities:
+                S_T = paths_at_maturities[T_key]
+                payoffs = np.maximum(S_T - K, 0)
+                discounted_payoff = np.exp(-RISK_FREE_RATE * T) * np.mean(payoffs)
+                option_prices[i, j] = discounted_payoff
+            else:
+                # Fallback: set a reasonable default price (lower threshold)
+                option_prices[i, j] = max(S0 - K * np.exp(-RISK_FREE_RATE * T), 1e-6)
     
     return option_prices
 
 def prices_to_iv_surface(option_prices):
     """
     Convert option prices to implied volatility surface.
-    Returns flattened 60-dimensional vector.
+    Returns flattened 60-dimensional vector with IV clipping for realism.
     """
     iv_surface = np.zeros((len(LOG_MONEYNESS), len(MATURITIES)))
     
@@ -242,41 +413,55 @@ def prices_to_iv_surface(option_prices):
         
         for j, T in enumerate(MATURITIES):
             price = option_prices[i, j]
-            iv = implied_volatility(price, S0, K, T, R)
+            iv = implied_volatility(price, S0, K, T, RISK_FREE_RATE)
             # Ensure iv is a scalar float
             if isinstance(iv, (tuple, list)):
                 iv = float(iv[0]) if len(iv) > 0 else 0.0
-            iv_surface[i, j] = float(iv)
+            
+            # Apply realistic IV clipping [0.01, 2.0] for market realism
+            iv = np.clip(float(iv), 0.01, 2.0)
+            iv_surface[i, j] = iv
     
     # Flatten to 60-dimensional vector (15 x 4)
     return iv_surface.flatten()
 
-# ---------------------------------------------------------------------------
 # Dataset generator ----------------------------------------------------------
 
-def generate_dataset(n: int, seed: int | None = None) -> tuple[np.ndarray, np.ndarray, MinMaxScaler, StandardScaler]:
+def generate_dataset(n: int, seed: int | None = None) -> tuple[
+    tuple[np.ndarray, np.ndarray],  # (X_train, y_train)
+    tuple[np.ndarray, np.ndarray],  # (X_val, y_val)  
+    tuple[np.ndarray, np.ndarray],  # (X_test, y_test)
+    MinMaxScaler,                   # x_scaler
+    StandardScaler                  # y_scaler
+]:
     """
     Generates a dataset of Quadratic Rough Heston parameters (X) and their corresponding
-    implied volatility surfaces (y). Input normalized to [-1,1], output standardized.
+    implied volatility surfaces (y). Splits into train/val/test and fits scalers only on training data.
     """
     if seed is not None:
         np.random.seed(seed)
+        random_seed = seed
+    else:
+        random_seed = 42  # default seed for reproducible splits
     
     # Sample parameter sets
     params_list = sample_params(n, sobol_seed=seed)
 
     # Compute IV surfaces in parallel
     def compute_iv_surface(params):
-        """Compute IV surface for one parameter set"""
-        paths = simulate_qrh_paths(params)
+        """Compute IV surface for one parameter set using GPU sequential processing"""
+        paths = simulate_qrh_paths(params, use_gpu=GPU_AVAILABLE)
         prices = compute_option_prices_mc(paths)
         iv_surface = prices_to_iv_surface(prices)
         return iv_surface
 
     print("Computing implied volatility surfaces...")
-    iv_surfaces = Parallel(n_jobs=-1, prefer="threads")(
-        delayed(compute_iv_surface)(p) for p in tqdm(params_list, desc="IV surfaces", unit="sample")
-    )
+    
+    # GPU sequential to avoid memory conflicts (optimal for strong GPU)
+    iv_surfaces = []
+    for params in tqdm(params_list, desc="IV surfaces", unit="sample"):
+        iv_surface = compute_iv_surface(params)
+        iv_surfaces.append(iv_surface)
     
     # Build input features X (15-dimensional: 5 model params + 10 factors)
     X_raw = np.column_stack([
@@ -291,20 +476,34 @@ def generate_dataset(n: int, seed: int | None = None) -> tuple[np.ndarray, np.nd
     # Build output y (60-dimensional IV surfaces)
     y_raw = np.array(iv_surfaces)
     
-    # Normalize inputs to [-1, 1] using MinMaxScaler
+    # IMPORTANT: Split data BEFORE fitting scalers to avoid data leakage
+    # First split: 10% for test
+    X_temp, X_test, y_temp, y_test = train_test_split(
+        X_raw, y_raw, test_size=0.1, random_state=random_seed
+    )
+    # Second split: 10% for val (so 80% train, 10% val, 10% test)
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_temp, y_temp, test_size=0.1111, random_state=random_seed + 1
+    )
+    
+    # Fit scalers ONLY on training data to prevent data leakage
     x_scaler = MinMaxScaler(feature_range=(-1, 1))
-    X = x_scaler.fit_transform(X_raw)
-    
-    # Normalize outputs (subtract mean, divide by std)
     y_scaler = StandardScaler()
-    y = y_scaler.fit_transform(y_raw)
     
-    return X, y, x_scaler, y_scaler
+    # Fit on train, transform all sets
+    X_train = x_scaler.fit_transform(X_train)
+    X_val = x_scaler.transform(X_val)
+    X_test = x_scaler.transform(X_test)
+    
+    y_train = y_scaler.fit_transform(y_train)
+    y_val = y_scaler.transform(y_val)
+    y_test = y_scaler.transform(y_test)
+    
+    return (X_train, y_train), (X_val, y_val), (X_test, y_test), x_scaler, y_scaler
 
-# ---------------------------------------------------------------------------
 # Main CLI (Command-Line Interface) -----------------------------------------
 
-def main():  # pragma: no cover
+def main(): 
     """
     Main function to parse command-line arguments, generate the dataset,
     split it into training/validation/testing sets, and save the results.
@@ -327,19 +526,9 @@ def main():  # pragma: no cover
 
     print(f"Generating {args.samples:,} Quadratic Rough Heston samples in {out_dir.absolute()}...")
 
-    # Generate the dataset
-    X, y, x_scaler, y_scaler = generate_dataset(args.samples, seed=args.seed)
-
-    # Train/Validation/Test split (70/15/15) --------------------------------
-    # First split: 85% train+val, 15% test  
-    X_temp, X_test, y_temp, y_test = train_test_split(
-        X, y, test_size=0.15, random_state=args.seed, shuffle=True
-    )
-    
-    # Second split: From remaining 85%, take ~82.4% as train, ~17.6% as val
-    # This gives us roughly 70% train, 15% val, 15% test
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_temp, y_temp, test_size=0.176, random_state=args.seed, shuffle=True  
+    # Generate the dataset with proper train/val/test split and no data leakage
+    (X_train, y_train), (X_val, y_val), (X_test, y_test), x_scaler, y_scaler = generate_dataset(
+        args.samples, seed=args.seed
     )
 
     # Save datasets

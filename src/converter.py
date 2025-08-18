@@ -9,8 +9,8 @@ Converts QRH NPZ files (train_0k.npz, val_0k.npz) to modular format:
 - Automatic QRH feature naming (15 features → 60 IV surface points)
 
 Usage:
-    python src/processing/qrh_converter.py --data_size 0k
-    python src/processing/qrh_converter.py --data_size 5k --no-cleanup
+    python src/processing/converter.py --data_size 0k
+    python src/processing/converter.py --data_size 5k --no-cleanup
 """
 
 import numpy as np
@@ -34,9 +34,9 @@ def convert_qrh_npz(data_dir: str, data_size: str) -> None:
     if not val_file.exists():
         raise FileNotFoundError(f"Validation file not found: {val_file}")
     
-    print(f"🔄 Converting QRH NPZ → modular format...")
-    print(f"  📂 {train_file.name}")
-    print(f"  📂 {val_file.name}")
+    print(f"Converting QRH NPZ → modular format...")
+    print(f"  {train_file.name}")
+    print(f"  {val_file.name}")
     
     # Load NPZ data
     train_data = np.load(train_file)
@@ -45,8 +45,8 @@ def convert_qrh_npz(data_dir: str, data_size: str) -> None:
     X_train, y_train = train_data['X'], train_data['y']
     X_val, y_val = val_data['X'], val_data['y']
     
-    print(f"  ✅ Train: X{X_train.shape}, y{y_train.shape}")
-    print(f"  ✅ Val:   X{X_val.shape}, y{y_val.shape}")
+    print(f"  Train: X{X_train.shape}, y{y_train.shape}")
+    print(f"  Val:   X{X_val.shape}, y{y_val.shape}")
     
     # Save modular format
     np.save(data_path / "train_X.npy", X_train)
@@ -54,12 +54,12 @@ def convert_qrh_npz(data_dir: str, data_size: str) -> None:
     np.save(data_path / "val_X.npy", X_val)
     np.save(data_path / "val_y.npy", y_val)
     
-    print(f"  💾 Saved: train_X.npy, train_y.npy, val_X.npy, val_y.npy")
+    print(f"  Saved: train_X.npy, train_y.npy, val_X.npy, val_y.npy")
     
     # Create CSV previews
     save_csv_previews(data_path, X_train, y_train)
     
-    print(f"  📊 Created CSV previews")
+    print(f"  Created CSV previews")
 
 
 def save_csv_previews(data_path: Path, X_train: np.ndarray, y_train: np.ndarray) -> None:
@@ -97,41 +97,34 @@ def check_if_converted(data_dir: str) -> bool:
 def main():
     """Main converter function."""
     parser = argparse.ArgumentParser(description="QRH NPZ → Modular Converter")
-    
     parser.add_argument("--data_size", type=str, required=True,
-                        choices=["0k", "5k", "150k"],
-                        help="Dataset size (0k, 5k, 150k)")
-    parser.add_argument("--data_dir", type=str, default=None,
-                        help="Data directory (default: data/raw/data_{size})")
+                        choices=["0k", "5k", "150k", "100k"],
+                        help="Dataset size (0k, 5k, 100k, 150k)")
     parser.add_argument("--no-cleanup", action="store_true",
                         help="Don't remove NPZ files after conversion")
-    
+
     args = parser.parse_args()
-    
-    # Auto-construct data directory
-    if args.data_dir is None:
-        args.data_dir = f"data/raw/data_{args.data_size}"
-    
-    data_path = Path(args.data_dir)
-    
-    print(f"🚀 QRH Data Converter")
-    print(f"📂 Directory: {data_path}")
-    print(f"📊 Size: {args.data_size}")
+
+    data_dir = f"data/raw/data_{args.data_size}"
+    data_path = Path(data_dir)
+
+    print(f"QRH Data Converter")
+    print(f"Directory: {data_path}")
+    print(f"Size: {args.data_size}")
     
     # Check directory exists
     if not data_path.exists():
-        print(f"❌ Directory not found: {data_path}")
+        print(f"Directory not found: {data_path}")
         return 1
-    
+
     # Check if already converted
-    if check_if_converted(args.data_dir):
-        print(f"✅ Data already in modular format!")
+    if check_if_converted(data_dir):
+        print(f"Data already in modular format!")
         return 0
-    
+
     # Convert
     try:
-        convert_qrh_npz(args.data_dir, args.data_size)
-        
+        convert_qrh_npz(data_dir, args.data_size)
         # Cleanup NPZ files if requested
         if not args.no_cleanup:
             npz_files = [f"train_{args.data_size}.npz", f"val_{args.data_size}.npz"]
@@ -139,26 +132,22 @@ def main():
                 npz_path = data_path / npz_file
                 if npz_path.exists():
                     npz_path.unlink()
-                    print(f"  🗑️  Removed: {npz_file}")
-        
-        print(f"\n✅ Conversion completed!")
-        print(f"📊 Files created:")
+                    print(f"  Removed: {npz_file}")
+        print(f"\nConversion completed!")
+        print(f"Files created:")
         print(f"  - train_X.npy, train_y.npy")
         print(f"  - val_X.npy, val_y.npy") 
         print(f"  - train_X.csv, train_y.csv (previews)")
-        
         # Check scalers
         scalers = ["x_scaler.pkl", "y_scaler.pkl"]
         missing_scalers = [s for s in scalers if not (data_path / s).exists()]
         if missing_scalers:
-            print(f"⚠️  Missing scalers: {missing_scalers}")
+            print(f"Missing scalers: {missing_scalers}")
         else:
-            print(f"✅ Scalers found: x_scaler.pkl, y_scaler.pkl")
-        
+            print(f"Scalers found: x_scaler.pkl, y_scaler.pkl")
         return 0
-        
     except Exception as e:
-        print(f"❌ Conversion failed: {e}")
+        print(f"Conversion failed: {e}")
         return 1
 
 
