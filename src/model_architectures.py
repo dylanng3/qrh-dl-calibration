@@ -332,7 +332,8 @@ def create_advanced_loss_function(pca_info: Dict[str, Any],
                                 delta: float = 0.015,
                                 alpha: float = 0.1, 
                                 beta: float = 0.05,
-                                grid_shape: Tuple[int, int] = (4, 15)) -> callable:
+                                grid_shape: Tuple[int, int] = (4, 15),
+                                otm_put_weight: float = 1.0) -> callable:
     """
     Create advanced loss function combining PCA reconstruction, Huber loss, and Sobolev penalty.
     
@@ -342,6 +343,7 @@ def create_advanced_loss_function(pca_info: Dict[str, Any],
         delta: Huber loss threshold  
         alpha, beta: Sobolev penalty weights for strike/maturity smoothness
         grid_shape: IV surface grid shape
+        otm_put_weight: Extra weight for OTM Put region (strikes < 1.0)
         
     Returns:
         Loss function compatible with Keras
@@ -353,33 +355,55 @@ def create_advanced_loss_function(pca_info: Dict[str, Any],
     # Create Sobolev penalty
     sobolev_fn = create_sobolev_penalty(grid_shape, alpha, beta)
     
-    # Prepare weights
+    # Create enhanced weights for OTM Put region
     if weights is not None:
-        weights_tf = tf.constant(weights, dtype=tf.float32)
+        enhanced_weights = weights.copy()
     else:
-        weights_tf = None
+        enhanced_weights = np.ones(grid_shape[0] * grid_shape[1])  # Default uniform weights
     
-    def advanced_loss(y_true: tf.Tensor, pca_coeffs_pred: tf.Tensor) -> tf.Tensor:
+    # Apply extra weight to OTM Put region (assuming 10x6 or 4x15 grid)
+    n_strikes = grid_shape[1] if grid_shape[1] >= grid_shape[0] else grid_shape[0]
+    n_tenors = grid_shape[0] if grid_shape[1] >= grid_shape[0] else grid_shape[1]
+    
+    # Identify OTM Put indices (typically first 1/3 of strikes)
+    otm_put_strike_count = n_strikes // 3
+    for tenor_idx in range(n_tenors):
+        for strike_idx in range(otm_put_strike_count):
+            if grid_shape[1] >= grid_shape[0]:  # (n_tenors, n_strikes)
+                idx = tenor_idx * n_strikes + strike_idx
+            else:  # (n_strikes, n_tenors) 
+                idx = strike_idx * n_tenors + tenor_idx
+            enhanced_weights[idx] *= otm_put_weight
+    
+    weights_tf = tf.constant(enhanced_weights, dtype=tf.float32)
+    
+    @tf.function
+    def advanced_loss(y_true_pca: tf.Tensor, pca_coeffs_pred: tf.Tensor) -> tf.Tensor:
         """
         Advanced loss function.
         
         Args:
-            y_true: True IV surface (batch_size, 60)
+            y_true_pca: True PCA coefficients (batch_size, K)
             pca_coeffs_pred: Predicted PCA coefficients (batch_size, K)
             
         Returns:
             Total loss
         """
-        # Reconstruct IV surface from PCA coefficients
-        y_pred = pca_layer(pca_coeffs_pred)  # (batch_size, 60)
+        # Reconstruct IV surfaces from both true and predicted PCA coefficients
+        y_true_reconstructed = pca_layer(y_true_pca)  # (batch_size, 60)
+        y_pred_reconstructed = pca_layer(pca_coeffs_pred)  # (batch_size, 60)
         
-        # Base loss: Weighted Huber
-        base_loss = weighted_huber_loss(y_true, y_pred, weights_tf, delta)
+        # Base loss: Weighted Huber with enhanced OTM Put weights (in IV space)
+        base_loss = weighted_huber_loss(y_true_reconstructed, y_pred_reconstructed, weights_tf, delta)
         
-        # Sobolev smoothness penalty
-        smoothness_loss = sobolev_fn(y_pred, y_true)
+        # PCA coefficient loss (in PCA space)
+        pca_loss = tf.reduce_mean(tf.square(y_true_pca - pca_coeffs_pred))
         
-        return base_loss + smoothness_loss
+        # Sobolev smoothness penalty (in IV space)
+        smoothness_loss = sobolev_fn(y_pred_reconstructed, y_true_reconstructed)
+        
+        # Combined loss: PCA loss + weighted IV loss + smoothness penalty
+        return 0.5 * pca_loss + 0.3 * base_loss + 0.2 * smoothness_loss
     
     return advanced_loss
 
@@ -392,7 +416,8 @@ def compile_advanced_qrh_model(model: keras.Model,
                               pca_info: Dict[str, Any],
                               learning_rate: float = 1e-3,
                               weights: Optional[np.ndarray] = None,
-                              loss_params: Optional[Dict[str, float]] = None) -> keras.Model:
+                              loss_params: Optional[dict] = None,
+                              otm_put_weight: float = 1.0) -> keras.Model:
     """
     Compile advanced QRH model with custom loss function.
     
@@ -402,6 +427,7 @@ def compile_advanced_qrh_model(model: keras.Model,
         learning_rate: Learning rate for optimizer
         weights: Optional weights for IV surface points
         loss_params: Loss function parameters
+        otm_put_weight: Extra weight for OTM Put region
         
     Returns:
         Compiled model
@@ -413,8 +439,12 @@ def compile_advanced_qrh_model(model: keras.Model,
             'delta': 0.015,
             'alpha': 0.1, 
             'beta': 0.05,
-            'grid_shape': (4, 15)
+            'grid_shape': (4, 15),
+            'otm_put_weight': otm_put_weight
         }
+    else:
+        # Add otm_put_weight to existing params
+        loss_params['otm_put_weight'] = otm_put_weight
     
     # Create loss function
     loss_fn = create_advanced_loss_function(

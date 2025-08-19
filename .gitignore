@@ -9,6 +9,4 @@ __pycache__/
 .ipynb_checkpoints/
 # VSCode
 .vscode/
-data/
-experiments/
 
