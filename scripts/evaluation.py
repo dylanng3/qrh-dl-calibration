@@ -13,7 +13,7 @@ This script provides a unified suite for evaluating trained QRH models, includin
 
 Usage:
     python3 evaluation.py --data_path path/to/test_data.npz [--model_path path/to/model.keras]
-    (python3 evaluation.py --data_path data/raw/data_100k/test_100k.npz)
+    (python3 scripts/evaluation.py --data_path data/raw/data_100k/test_100k.npz)
 
 Arguments:
     --data_path   Path to the test .npz file (required)
@@ -92,12 +92,12 @@ class QRHModelEvaluator:
         if self.pca_model is not None:
             # For PCA-head models
             print("Using PCA model for predictions...")
-            y_pred_pca = self.model.predict(X_test, verbose=0)
+            y_pred_pca = self.model.predict(X_test, verbose=0) # type: ignore
             y_pred = self.pca_model.inverse_transform(y_pred_pca)
             print(f"Transformed from PCA space: {y_pred_pca.shape} -> {y_pred.shape}")
         else:
             # For standard models
-            y_pred = self.model.predict(X_test, verbose=0)
+            y_pred = self.model.predict(X_test, verbose=0) # type: ignore
             
         # Basic metrics
         metrics = self._calculate_metrics(y_test, y_pred)
@@ -633,7 +633,7 @@ def test_evaluation_module():
         print(f"Test failed: {str(e)}")
         return False
 
-def load_test_data(data_size="100k", data_path=None):
+def load_test_data(data_size="100k", data_path=None): # type: ignore
     """Load test data for evaluation."""
     if not data_path:
         raise ValueError("You must provide --data_path to the test .npz file (e.g. --data_path data/raw/data_100k/test_100k.npz)")
@@ -662,7 +662,7 @@ def load_test_data(data_size="100k", data_path=None):
     print(f"Loaded data: X_test {X_test.shape}, y_test {y_test.shape}")
     return X_test, y_test, x_scaler, y_scaler
 
-def find_latest_model(model_path=None):
+def find_latest_model(model_path=None): # type: ignore
     """Find the latest trained model."""
     if model_path:
         model_path = Path(model_path)
@@ -703,12 +703,9 @@ def load_model_and_pca(model_path, experiment_dir):
         tf = None
     
     # Load main model
-    if tf is not None:
-        model = tf.keras.models.load_model(str(model_path))
-    else:
-        model = keras.models.load_model(str(model_path))
+    model = keras.models.load_model(str(model_path))
     print(f"Loaded model from: {model_path}")
-    print(f"Model parameters: {model.count_params():,}")
+    print(f"Model parameters: {model.count_params():,}") # type: ignore
     
     # Look for PCA model in the same experiment directory
     pca_model = None
@@ -872,8 +869,8 @@ def run_comprehensive_evaluation(model_path=None, data_path=None):
         
         # Load the model
         print(f"Loading model from: {model_path}")
-        model = tf.keras.models.load_model(str(model_path))
-        print(f"Model parameters: {model.count_params():,}")
+        model = keras.models.load_model(str(model_path))
+        print(f"Model parameters: {model.count_params():,}") # type: ignore
         
         # Load PCA model if not already loaded
         if pca_model is None:
@@ -934,7 +931,7 @@ def run_comprehensive_evaluation(model_path=None, data_path=None):
             print(f"   Explained Var: {np.sum(pca_model.explained_variance_ratio_):.6f}")
         
         print("\nModel Complexity:")
-        print(f"   Parameters:    {model.count_params():,}")
+        print(f"   Parameters:    {model.count_params():,}") # type: ignore
         
         if results['bucket_metrics']:
             print("\nBucket Performance (RMSE):")

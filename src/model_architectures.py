@@ -29,8 +29,9 @@ from typing import Tuple, Optional, Dict, Any
 # PCA Components Fitting
 # ----------------------------------------------------------------------
 
-def fit_pca_components(y_train_raw: np.ndarray, K: int = 12, 
-                      use_scaler: bool = True) -> Dict[str, Any]:
+def fit_pca_components(y_train_raw: np.ndarray,
+                       K: int = 12, 
+                       use_scaler: bool = True) -> Dict[str, Any]:
     """
     Fit PCA components for IV surface dimensionality reduction.
     
@@ -65,18 +66,17 @@ def fit_pca_components(y_train_raw: np.ndarray, K: int = 12,
     print(f"PCA explained variance: {total_explained:.4f} ({100*total_explained:.2f}%)")
     print(f"Top 5 components: {explained_var_ratio[:5]}")
     
-    return {
-        'pca': pca,
-        'P': P,              # Components matrix (60, K)  
-        'mu': mu,            # Mean vector (60,)
-        'y_scaler': y_scaler,
-        'explained_variance_ratio': explained_var_ratio,
-        'total_explained': total_explained,
-        'K': K
-    }
+    return {'pca': pca,
+            'P': P,              # Components matrix (60, K)  
+            'mu': mu,            # Mean vector (60,)
+            'y_scaler': y_scaler,
+            'explained_variance_ratio': explained_var_ratio,
+            'total_explained': total_explained,
+            'K': K}
 
 
-def pca_transform_targets(y_data: np.ndarray, pca_info: Dict[str, Any]) -> np.ndarray:
+def pca_transform_targets(y_data: np.ndarray,
+                          pca_info: Dict[str, Any]) -> np.ndarray:
     """Transform IV targets to PCA coefficient space."""
     if pca_info['y_scaler'] is not None:
         Y = pca_info['y_scaler'].transform(y_data)
@@ -89,7 +89,8 @@ def pca_transform_targets(y_data: np.ndarray, pca_info: Dict[str, Any]) -> np.nd
     return coeffs
 
 
-def pca_inverse_transform(coeffs: np.ndarray, pca_info: Dict[str, Any]) -> np.ndarray:
+def pca_inverse_transform(coeffs: np.ndarray,
+                          pca_info: Dict[str, Any]) -> np.ndarray:
     """Reconstruct IV surface from PCA coefficients."""
     # Reconstruct: Y = mu + coeffs @ P.T  
     Y_reconstructed = pca_info['mu'] + coeffs @ pca_info['P'].T
@@ -106,16 +107,14 @@ def pca_inverse_transform(coeffs: np.ndarray, pca_info: Dict[str, Any]) -> np.nd
 # Advanced Residual MLP with PCA-head  
 # ----------------------------------------------------------------------
 
-def build_resmlp_pca_model(
-    input_dim: int = 15,
-    K: int = 12,
-    width: int = 128,
-    n_blocks: int = 8,
-    neck_width: int = 64,
-    dropout_rate: float = 0.0,
-    l2_reg: float = 1e-5,
-    name: str = "QRH_ResMLP_PCA"
-) -> keras.Model:
+def build_resmlp_pca_model(input_dim: int = 15,
+                           K: int = 12,
+                           width: int = 128,
+                           n_blocks: int = 8,
+                           neck_width: int = 64,
+                           dropout_rate: float = 0.0,
+                           l2_reg: float = 1e-5,
+                           name: str = "QRH_ResMLP_PCA") -> keras.Model:
     """
     Build Residual MLP with PCA-head for QRH IV surface prediction.
     
@@ -143,14 +142,18 @@ def build_resmlp_pca_model(
     reg = keras.regularizers.l2(l2_reg) if l2_reg > 0 else None
     
     # Input
-    x_in = keras.Input(shape=(input_dim,), name="input_params")
+    x_in = keras.Input(shape=(input_dim,),
+                       name="input_params")
     
     # Encoder 
-    h = layers.Dense(width, kernel_regularizer=reg, name="encoder")(x_in)
+    h = layers.Dense(width,
+                     kernel_regularizer=reg,
+                     name="encoder")(x_in)
     h = layers.Activation('swish')(h)
     
     if dropout_rate > 0:
-        h = layers.Dropout(dropout_rate, name="encoder_dropout")(h)
+        h = layers.Dropout(dropout_rate,
+                           name="encoder_dropout")(h)
     
     # Residual blocks
     for i in range(n_blocks):
@@ -158,29 +161,38 @@ def build_resmlp_pca_model(
         residual = h
         
         # Transform
-        h = layers.Dense(width, use_bias=False, kernel_regularizer=reg, 
+        h = layers.Dense(width,
+                         use_bias=False,
+                         kernel_regularizer=reg, 
                         name=f"res_block_{i+1}_dense")(h)
         h = layers.LayerNormalization(name=f"res_block_{i+1}_ln")(h)
         h = layers.Activation('swish')(h)
         
         if dropout_rate > 0:
-            h = layers.Dropout(dropout_rate, name=f"res_block_{i+1}_dropout")(h)
+            h = layers.Dropout(dropout_rate,
+                               name=f"res_block_{i+1}_dropout")(h)
         
         # Add skip connection
         h = layers.Add(name=f"res_block_{i+1}_add")([residual, h])
     
     # Neck
-    h = layers.Dense(neck_width, kernel_regularizer=reg, name="neck")(h) 
+    h = layers.Dense(neck_width,
+                     kernel_regularizer=reg,
+                     name="neck")(h) 
     h = layers.Activation('swish')(h)
     
     if dropout_rate > 0:
         h = layers.Dropout(dropout_rate, name="neck_dropout")(h)
     
     # PCA-head (linear output)
-    pca_coeffs = layers.Dense(K, activation='linear', kernel_regularizer=reg,
-                             name="pca_coeffs")(h)
+    pca_coeffs = layers.Dense(K,
+                              activation='linear',
+                              kernel_regularizer=reg,
+                              name="pca_coeffs")(h)
     
-    model = keras.Model(inputs=x_in, outputs=pca_coeffs, name=name)
+    model = keras.Model(inputs=x_in,
+                        outputs=pca_coeffs,
+                        name=name)
     return model
 
 
@@ -191,8 +203,10 @@ def build_resmlp_pca_model(
 def create_pca_reconstruction_layer(pca_info: Dict[str, Any]) -> layers.Layer:
     """Create TensorFlow layer for PCA reconstruction."""
     
-    P_tf = tf.constant(pca_info['P'].T, dtype=tf.float32)  # (K, 60)
-    mu_tf = tf.constant(pca_info['mu'], dtype=tf.float32)   # (60,)
+    P_tf = tf.constant(pca_info['P'].T,
+                       dtype=tf.float32)  # (K, 60)
+    mu_tf = tf.constant(pca_info['mu'],
+                        dtype=tf.float32)   # (60,)
     
     class PCAReconstructionLayer(layers.Layer):
         def __init__(self, **kwargs):
@@ -207,24 +221,16 @@ def create_pca_reconstruction_layer(pca_info: Dict[str, Any]) -> layers.Layer:
     return PCAReconstructionLayer()
 
 
-def huber_loss(y_true: tf.Tensor, y_pred: tf.Tensor, delta: float = 0.015) -> tf.Tensor:
-    """Huber loss - robust to outliers."""
-    error = y_pred - y_true
-    abs_error = tf.abs(error)
-    quadratic = tf.where(abs_error <= delta, 
-                        0.5 * tf.square(error),
-                        delta * (abs_error - 0.5 * delta))
-    return tf.reduce_mean(quadratic)
-
-
-def weighted_huber_loss(y_true: tf.Tensor, y_pred: tf.Tensor, 
-                       weights: Optional[tf.Tensor] = None, delta: float = 0.015) -> tf.Tensor:
+def weighted_huber_loss(y_true: tf.Tensor,
+                        y_pred: tf.Tensor, 
+                        weights: Optional[tf.Tensor] = None,
+                        delta: float = 0.015) -> tf.Tensor:
     """Weighted Huber loss for emphasizing important IV regions."""
-    error = y_pred - y_true
+    error = y_pred - y_true # type: ignore
     abs_error = tf.abs(error)
     quadratic = tf.where(abs_error <= delta,
-                        0.5 * tf.square(error), 
-                        delta * (abs_error - 0.5 * delta))
+                         0.5 * tf.square(error), 
+                         delta * (abs_error - 0.5 * delta))
     
     if weights is not None:
         # Normalize weights to have mean=1
@@ -235,7 +241,8 @@ def weighted_huber_loss(y_true: tf.Tensor, y_pred: tf.Tensor,
 
 
 def create_sobolev_penalty(grid_shape: Tuple[int, int] = (4, 15),
-                          alpha: float = 0.1, beta: float = 0.05) -> callable:
+                           alpha: float = 0.1,
+                           beta: float = 0.05) -> callable: # type: ignore
     """
     Create Sobolev penalty for smoothness along strike (k) and maturity (tau) dimensions.
     
@@ -280,7 +287,8 @@ def create_sobolev_penalty(grid_shape: Tuple[int, int] = (4, 15),
     D_k_tf = tf.constant(D_k, dtype=tf.float32)
     D_tau_tf = tf.constant(D_tau, dtype=tf.float32) 
     
-    def sobolev_penalty(y_pred: tf.Tensor, y_true: tf.Tensor) -> tf.Tensor:
+    def sobolev_penalty(y_pred: tf.Tensor,
+                        y_true: tf.Tensor) -> tf.Tensor:
         """Compute Sobolev penalty for surface smoothness."""
         # Compute differences for predicted surface
         dk_pred = tf.linalg.matmul(y_pred, D_k_tf, transpose_b=True)
@@ -299,41 +307,13 @@ def create_sobolev_penalty(grid_shape: Tuple[int, int] = (4, 15),
     return sobolev_penalty
 
 
-def create_simple_pca_loss(pca_info: Dict[str, Any]) -> callable:
-    """
-    Create simple MSE loss for PCA coefficients training.
-    Used for easier training and testing.
-    
-    Args:
-        pca_info: PCA information dict
-        
-    Returns:
-        Simple loss function for PCA coefficients
-    """
-    
-    def simple_pca_loss(y_true_pca: tf.Tensor, y_pred_pca: tf.Tensor) -> tf.Tensor:
-        """
-        Simple MSE loss for PCA coefficients.
-        
-        Args:
-            y_true_pca: True PCA coefficients (batch_size, K)
-            y_pred_pca: Predicted PCA coefficients (batch_size, K)
-            
-        Returns:
-            MSE loss
-        """
-        return tf.reduce_mean(tf.square(y_true_pca - y_pred_pca))
-    
-    return simple_pca_loss
-
-
 def create_advanced_loss_function(pca_info: Dict[str, Any],
-                                weights: Optional[np.ndarray] = None,
-                                delta: float = 0.015,
-                                alpha: float = 0.1, 
-                                beta: float = 0.05,
-                                grid_shape: Tuple[int, int] = (4, 15),
-                                otm_put_weight: float = 1.0) -> callable:
+                                  weights: Optional[np.ndarray] = None,
+                                  delta: float = 0.015,
+                                  alpha: float = 0.1, 
+                                  beta: float = 0.05,
+                                  grid_shape: Tuple[int, int] = (4, 15),
+                                  otm_put_weight: float = 1.0) -> callable: # type: ignore
     """
     Create advanced loss function combining PCA reconstruction, Huber loss, and Sobolev penalty.
     
@@ -378,7 +358,8 @@ def create_advanced_loss_function(pca_info: Dict[str, Any],
     weights_tf = tf.constant(enhanced_weights, dtype=tf.float32)
     
     @tf.function
-    def advanced_loss(y_true_pca: tf.Tensor, pca_coeffs_pred: tf.Tensor) -> tf.Tensor:
+    def advanced_loss(y_true_pca: tf.Tensor,
+                      pca_coeffs_pred: tf.Tensor) -> tf.Tensor:
         """
         Advanced loss function.
         
@@ -394,17 +375,20 @@ def create_advanced_loss_function(pca_info: Dict[str, Any],
         y_pred_reconstructed = pca_layer(pca_coeffs_pred)  # (batch_size, 60)
         
         # Base loss: Weighted Huber with enhanced OTM Put weights (in IV space)
-        base_loss = weighted_huber_loss(y_true_reconstructed, y_pred_reconstructed, weights_tf, delta)
+        base_loss = weighted_huber_loss(y_true_reconstructed,
+                                        y_pred_reconstructed,
+                                        weights_tf, # type: ignore
+                                        delta) 
         
         # PCA coefficient loss (in PCA space)
-        pca_loss = tf.reduce_mean(tf.square(y_true_pca - pca_coeffs_pred))
+        pca_loss = tf.reduce_mean(tf.square(y_true_pca - pca_coeffs_pred)) # type: ignore
         
         # Sobolev smoothness penalty (in IV space)
         smoothness_loss = sobolev_fn(y_pred_reconstructed, y_true_reconstructed)
         
         # Combined loss: PCA loss + weighted IV loss + smoothness penalty
-        return 0.5 * pca_loss + 0.3 * base_loss + 0.2 * smoothness_loss
-    
+        return 0.5 * pca_loss + 0.3 * base_loss + 0.2 * smoothness_loss # type: ignore
+
     return advanced_loss
 
 
@@ -413,11 +397,11 @@ def create_advanced_loss_function(pca_info: Dict[str, Any],
 # ----------------------------------------------------------------------
 
 def compile_advanced_qrh_model(model: keras.Model,
-                              pca_info: Dict[str, Any],
-                              learning_rate: float = 1e-3,
-                              weights: Optional[np.ndarray] = None,
-                              loss_params: Optional[dict] = None,
-                              otm_put_weight: float = 1.0) -> keras.Model:
+                               pca_info: Dict[str, Any],
+                               learning_rate: float = 1e-3,
+                               weights: Optional[np.ndarray] = None,
+                               loss_params: Optional[dict] = None,
+                               otm_put_weight: float = 1.0) -> keras.Model:
     """
     Compile advanced QRH model with custom loss function.
     
@@ -447,47 +431,40 @@ def compile_advanced_qrh_model(model: keras.Model,
         loss_params['otm_put_weight'] = otm_put_weight
     
     # Create loss function
-    loss_fn = create_advanced_loss_function(
-        pca_info=pca_info,
-        weights=weights,
-        **loss_params
-    )
+    loss_fn = create_advanced_loss_function(pca_info=pca_info,
+                                            weights=weights,
+                                            **loss_params)
     
     # Optimizer
     optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
     
     # Compile
-    model.compile(
-        optimizer=optimizer,
-        loss=loss_fn,
-        metrics=['mae']  # Additional metrics
-    )
+    model.compile(optimizer=optimizer, # type: ignore
+                  loss=loss_fn,
+                  metrics=['mae'])  # Additional metrics
     
     return model
 
 
 def create_training_callbacks(patience: int = 10, 
-                            reduce_lr_patience: int = 5,
-                            min_lr: float = 1e-6,
-                            factor: float = 0.5) -> list:
+                              reduce_lr_patience: int = 5,
+                              min_lr: float = 1e-6,
+                              factor: float = 0.5) -> list:
     """Create training callbacks for advanced model."""
     
     callbacks = [
-        keras.callbacks.EarlyStopping(
-            monitor='val_loss',
-            patience=patience,
-            restore_best_weights=True,
-            verbose=1
-        ),
-        keras.callbacks.ReduceLROnPlateau(
-            monitor='val_loss',
-            factor=factor,
-            patience=reduce_lr_patience,
-            min_lr=min_lr,
-            verbose=1
-        ),
+        keras.callbacks.EarlyStopping(monitor='val_loss',
+                                      patience=patience,
+                                      restore_best_weights=True,
+                                      verbose=1),
+        
+        keras.callbacks.ReduceLROnPlateau(monitor='val_loss',
+                                          factor=factor,
+                                          patience=reduce_lr_patience,
+                                          min_lr=min_lr,
+                                          verbose=1),
     ]
-    
+
     return callbacks
 
 
@@ -495,8 +472,9 @@ def create_training_callbacks(patience: int = 10,
 # Model Evaluation and Diagnostics
 # ----------------------------------------------------------------------
 
-def evaluate_by_buckets(y_true: np.ndarray, y_pred: np.ndarray,
-                       grid_shape: Tuple[int, int] = (4, 15)) -> Dict[str, float]:
+def evaluate_by_buckets(y_true: np.ndarray,
+                        y_pred: np.ndarray,
+                        grid_shape: Tuple[int, int] = (4, 15)) -> Dict[str, float]:
     """
     Evaluate model performance by different IV surface buckets.
     
@@ -547,82 +525,3 @@ def evaluate_by_buckets(y_true: np.ndarray, y_pred: np.ndarray,
     results['long_tenor'] = np.sqrt(np.mean((long_pred - long_true) ** 2))
     
     return results
-
-
-# ----------------------------------------------------------------------
-# Main Functions for Easy Usage
-# ----------------------------------------------------------------------
-
-def build_and_compile_advanced_qrh_model(
-    X_train: np.ndarray,
-    y_train: np.ndarray,
-    model_params: Optional[Dict[str, Any]] = None,
-    pca_params: Optional[Dict[str, Any]] = None,
-    loss_params: Optional[Dict[str, Any]] = None,
-    learning_rate: float = 1e-3,
-    weights: Optional[np.ndarray] = None
-) -> Tuple[keras.Model, Dict[str, Any]]:
-    """
-    Build and compile advanced QRH model with PCA-head in one step.
-    
-    Args:
-        X_train: Training input data (N, 15)
-        y_train: Training target data (N, 60) - raw IV values
-        model_params: Model architecture parameters
-        pca_params: PCA fitting parameters  
-        loss_params: Loss function parameters
-        learning_rate: Learning rate
-        weights: Optional weights for IV surface points
-        
-    Returns:
-        Tuple of (compiled_model, pca_info)
-    """
-    
-    # Default parameters
-    if model_params is None:
-        model_params = {
-            'K': 12,
-            'width': 128, 
-            'n_blocks': 8,
-            'neck_width': 64,
-            'dropout_rate': 0.0,
-            'l2_reg': 1e-5
-        }
-    
-    if pca_params is None:
-        pca_params = {
-            'K': model_params['K'],
-            'use_scaler': True
-        }
-    
-    print("Step 1: Fitting PCA components...")
-    pca_info = fit_pca_components(y_train, **pca_params)
-    
-    print("Step 2: Building Residual MLP model...")  
-    model = build_resmlp_pca_model(
-        input_dim=X_train.shape[1],
-        **model_params
-    )
-    
-    print("Step 3: Compiling with advanced loss function...")
-    model = compile_advanced_qrh_model(
-        model=model,
-        pca_info=pca_info,
-        learning_rate=learning_rate,
-        weights=weights,
-        loss_params=loss_params
-    )
-    
-    print(f"Model summary:")
-    print(f"  - Parameters: {model.count_params():,}")
-    print(f"  - PCA components: {pca_info['K']} (explains {pca_info['total_explained']:.3f} variance)")
-    print(f"  - Architecture: {model_params['n_blocks']} residual blocks × {model_params['width']} units")
-    
-    return model, pca_info
-
-
-if __name__ == "__main__":
-    # Example usage
-    print("Advanced QRH Model Architectures")
-    print("This module provides PCA-head Residual MLP with Sobolev regularization")
-    print("Import and use build_and_compile_advanced_qrh_model() for easy setup")

@@ -13,7 +13,7 @@ Features:
 - Integrated TensorBoard logging (logs in reports/tensorboard/)
 
 Usage:
-    python training.py --data_size 100k --epochs 200 --format modular --pca_components 30
+    python3 scripts/training.py --data_size 100k --epochs 200 --format modular --pca_components 30
 
 Arguments:
     --data_size      Dataset size to use (e.g., 5k, 100k, 150k, ...)
@@ -32,7 +32,6 @@ Arguments:
     --sobolev_alpha  Strike smoothness weight
     --sobolev_beta   Maturity smoothness weight
 
-
 All models and logs are saved in the appropriate experiment and report directories.
 """
 
@@ -46,10 +45,38 @@ import pickle
 import random
 import tensorflow as tf
 
+'''
+Deterministic Training & Reproducibility:
+-----------------------------------------
+This script is configured to produce fully reproducible results across runs (same seed, same config, same data):
+# Ensure reproducible results
 SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
 tf.random.set_seed(SEED)
+
+# Configure TensorFlow for deterministic behavior
+os.environ['TF_DETERMINISTIC_OPS'] = '1'
+os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
+os.environ['PYTHONHASHSEED'] = str(SEED)
+
+# Configure TensorFlow threading for reproducibility
+tf.config.threading.set_inter_op_parallelism_threads(1)
+tf.config.threading.set_intra_op_parallelism_threads(1)
+
+# Additional GPU deterministic configuration (if GPU available)
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        # Memory growth to avoid OOM
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print(f"Configured {len(gpus)} GPU(s) for deterministic training")
+    except RuntimeError as e:
+        print(f"GPU configuration warning: {e}")
+else:
+    print("Using CPU for training")
+'''
 
 def main():
     """Main training function for advanced QRH model."""
@@ -111,11 +138,8 @@ def main():
 
     
     # Setup paths
-    project_root = Path(__file__).parent
-    src_path = project_root / "src"
-    
-    # Add to Python path
-    sys.path.insert(0, str(src_path))
+    project_root = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(project_root))
     
     # Import after setting path
     try:
@@ -346,7 +370,7 @@ def main():
             epochs=epochs,
             validation_data=(X_val, y_val_pca),
             callbacks=callbacks,
-            verbose=2
+            verbose=2 # type: ignore
         )
         
         print("Training completed!")
@@ -393,7 +417,7 @@ def main():
         **model_params
     )
     eval_model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=args.learning_rate),
+        optimizer=keras.optimizers.Adam(learning_rate=args.learning_rate), # type: ignore
         loss='mse',
         metrics=['mae']
     )

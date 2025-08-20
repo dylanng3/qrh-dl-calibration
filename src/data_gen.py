@@ -55,7 +55,7 @@ try:
     
     def to_numpy(arr):
         """Convert CuPy array to numpy array"""
-        return cp.asnumpy(arr)
+        return cp.asnumpy(arr) # type: ignore
         
 except ImportError:
     cp = np  # Fallback to numpy if CuPy not available

@@ -17,10 +17,10 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 import argparse
-import pickle
 
 
-def convert_qrh_npz(data_dir: str, data_size: str) -> None:
+def convert_qrh_npz(data_dir: str,
+                    data_size: str) -> None:
     """Convert QRH NPZ files to modular X,y format."""
     data_path = Path(data_dir)
     
@@ -62,7 +62,9 @@ def convert_qrh_npz(data_dir: str, data_size: str) -> None:
     print(f"  Created CSV previews")
 
 
-def save_csv_previews(data_path: Path, X_train: np.ndarray, y_train: np.ndarray) -> None:
+def save_csv_previews(data_path: Path,
+                      X_train: np.ndarray,
+                      y_train: np.ndarray) -> None:
     """Save CSV previews with proper QRH feature names."""
     
     # QRH feature names (15 features)

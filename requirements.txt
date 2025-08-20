@@ -1,6 +1,6 @@
 numpy
 cupy
-tensorflow
+tensorflow[and-cuda]
 keras
 scikit-learn
 scipy
