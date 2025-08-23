@@ -19,7 +19,7 @@ Arguments:
     --data_path   Path to the test .npz file (required)
     --model_path  Path to the trained model (.keras) (optional; uses latest if not specified)
 
-All results and plots are saved in the reports/evaluation/ directory.
+All results and plots are saved in the reports/ directory.
 """
 
 import argparse
@@ -817,7 +817,7 @@ def find_latest_model(base_dir="experiments"):
     
     return model_path, pca_model, latest_dir
 
-def create_evaluation_report(evaluator, model_name, save_dir="reports/evaluation"):
+def create_evaluation_report(evaluator, model_name, save_dir="reports"):
     """Create comprehensive evaluation report."""
     save_path = Path(save_dir)
     save_path.mkdir(parents=True, exist_ok=True)
@@ -854,7 +854,7 @@ def run_comprehensive_evaluation(model_path=None, data_path=None):
     try:
         # Load test data
         X_test, y_test = load_test_data(data_path)
-        
+
         # Load model
         if model_path:
             if not Path(model_path).exists():
@@ -866,12 +866,12 @@ def run_comprehensive_evaluation(model_path=None, data_path=None):
         else:
             model_path, pca_model, experiment_dir = find_latest_model()
             print(f"Found PCA model: {pca_model is not None}")
-        
+
         # Load the model
         print(f"Loading model from: {model_path}")
         model = keras.models.load_model(str(model_path))
         print(f"Model parameters: {model.count_params():,}") # type: ignore
-        
+
         # Load PCA model if not already loaded
         if pca_model is None:
             pca_path = experiment_dir / "pca_info.pkl"  # Fixed filename
@@ -882,17 +882,17 @@ def run_comprehensive_evaluation(model_path=None, data_path=None):
                     pca_model = pca_info['pca']  # Extract PCA from dict
                 print(f"Loaded PCA model with {pca_model.n_components_} components "
                       f"(explained variance: {np.sum(pca_model.explained_variance_ratio_):.6f})")
-        
+
         print(f"Final PCA model status: {pca_model is not None}")
-        
+
         # Create grids for analysis
         strike_grid = np.linspace(0.8, 1.2, 10)
         tenor_grid = np.linspace(0.1, 2.0, 6)
         print(f"Using grids: {len(strike_grid)} strikes × {len(tenor_grid)} tenors = {len(strike_grid) * len(tenor_grid)} points")
-        
+
         # Create evaluator and run evaluation
         evaluator = QRHModelEvaluator(model=model, pca_model=pca_model)
-        
+
         print("\nRunning comprehensive evaluation...")
         results = evaluator.evaluate_model(
             X_test, y_test,
@@ -900,15 +900,20 @@ def run_comprehensive_evaluation(model_path=None, data_path=None):
             tenor_grid=tenor_grid,
             verbose=True
         )
-        
+
         # Generate model name
-        model_name = f"QRH_Advanced_100k"
+        model_name = f"QRH_100k"
         if pca_model:
             model_name += f"_PCA{pca_model.n_components_}"
-        
-        # Create comprehensive report
-        save_dir = create_evaluation_report(evaluator, model_name)
-        
+
+        # Determine experiment name and reports dir
+        experiment_name = experiment_dir.name
+        reports_exp_dir = Path("reports") / experiment_name
+        reports_exp_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create comprehensive report in reports/experiment_xxx
+        save_dir = create_evaluation_report(evaluator, model_name, save_dir=str(reports_exp_dir))
+
         print("\nComplete evaluation report generated!")
         print(f"Files saved in: {save_dir}")
         

@@ -285,7 +285,7 @@ def main():
                 'delta': args.huber_delta,
                 'alpha': args.sobolev_alpha,
                 'beta': args.sobolev_beta,
-                'grid_shape': (10, 6),  # Assuming 10x6 grid for 60 IV points
+                'grid_shape': (4, 15),  # Standard QRH IV surface grid (4 maturities × 15 log-moneyness)
                 'otm_put_weight': args.otm_put_weight
             }
         )
@@ -314,9 +314,32 @@ def main():
         return 1
     
     # Create experiment directory
-    exp_dir = Path("experiments") / f"advanced_qrh_{args.data_size}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
+    exp_dir = Path("experiments") / f"experiment_{args.data_size}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
     exp_dir.mkdir(parents=True, exist_ok=True)
     print(f"Experiment directory: {exp_dir}")
+
+    # Save model config as JSON
+    import json
+    config_dict = {
+        "data": {
+            "data_size": args.data_size,
+            "format": args.format
+        },
+        "model": model_params,
+        "pca": pca_params,
+        "loss": loss_params,
+        "train": {
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "learning_rate": args.learning_rate,
+            "patience": args.patience,
+            "otm_put_weight": args.otm_put_weight
+        }
+    }
+    config_path = exp_dir / "model_config.json"
+    with open(config_path, "w") as f:
+        json.dump(config_dict, f, indent=2)
+    print(f"Model config saved to: {config_path}")
     
     # Setup model saving (weights only to avoid custom loss serialization issues)
     weights_save_path = exp_dir / f"{args.model_name}_{args.data_size}.weights.h5"
@@ -355,9 +378,9 @@ def main():
     )
 
     # Add TensorBoard callback
-    log_dir = os.path.join("reports", "tensorboard", datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    log_dir = exp_dir / "tensorboard"
     callbacks.append(
-        keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1, write_graph=True, write_images=True)
+        keras.callbacks.TensorBoard(log_dir=str(log_dir), histogram_freq=1, write_graph=True, write_images=True)
     )
     print(f"TensorBoard logs will be saved to: {log_dir}")
     
@@ -402,7 +425,7 @@ def main():
             'delta': args.huber_delta,
             'alpha': args.sobolev_alpha,
             'beta': args.sobolev_beta,
-            'grid_shape': (10, 6),
+            'grid_shape': (4, 15),  # Standard QRH IV surface grid (4 maturities × 15 log-moneyness)
             'otm_put_weight': args.otm_put_weight
         }
     )
