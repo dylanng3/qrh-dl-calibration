@@ -110,9 +110,17 @@ Helps the model focus on improving the OTM Put region (usually the hardest).
 
 ### `src/data_gen.py`
 **Function**: Generate synthetic Heston data
+- Randomly sample parameters from realistic ranges
+- Compute IV surface using FFT (ground truth)
+- Normalize input/output
 
 ### `scripts/training.py`
 **Full pipeline**:
+1. Load data (modular or npz format)
+2. Fit PCA on IV surface
+3. Transform targets to PCA space
+4. Build and compile model with advanced loss
+5. Training with callbacks
 6. Save model, weights, PCA info, summary
 
 ### `scripts/evaluation.py`
@@ -152,7 +160,9 @@ The evaluation script performs:
 ### 3. Experiment Management & Reproducibility
 Each training run automatically creates a timestamped directory in `experiments/`:
 ```
-experiments/advanced_qrh_100k_20250819_184403/
+experiments/experiment_100k_20250825_215646/
+├── tensorboard                     # Tensorboard logs
+├── model_config.json               # Model configs
 ├── qrh_advanced_100k.weights.h5    # Best model weights
 ├── qrh_advanced_100k.keras         # Full model (evaluation-ready)
 ├── pca_info.pkl                    # PCA transformer & explained variance
@@ -166,10 +176,6 @@ Real-time tracking of:
 - **Learning rate**: scheduling with ReduceLROnPlateau
 - **Model architecture**: computation graph
 - **Hyperparameters**: auto-logged args
-
-```bash
-tensorboard --logdir reports/tensorboard/
-```
 
 ### 5. Modular & Extensible Design
 - **Easy parameter tuning**: Command-line args for all hyperparameters
@@ -202,7 +208,7 @@ python scripts/training.py --data_size 100k --epochs 200 --format modular --pca_
 ```bash
 python scripts/evaluation.py --data_path data/raw/data_100k/test_100k.npz
 ```
-- Results and plots will be saved in `reports/evaluation/`.
+- Results and plots will be saved in `reports/`.
 
 ### 4. Monitor Training with TensorBoard
 
@@ -217,19 +223,19 @@ tensorboard --logdir reports/tensorboard/
 ### Performance metrics (100K dataset, PCA-30, OTM weight=2.0)
 ```
 Test Results:
-├── R² Score:           0.9987
-├── RMSE Overall:       0.0362
-├── MAE Overall:        0.0106
+├── R² Score:           0.998068
+├── RMSE Overall:       0.026050
+├── MAE Overall:        0.006485
 └── Bucket RMSE:
-    ├── ATM:            0.0266
-    ├── OTM Put:        0.0388
-    ├── OTM Call:       0.0382
-    ├── Short Tenor:    0.0415
-    └── Long Tenor:     0.0298
+    ├── ATM:            0.025809
+    ├── OTM Put:        0.028796
+    ├── OTM Call:       0.023855
+    ├── Short Tenor:    0.030924
+    └── Long Tenor:     0.020023
 
 Training Info:
 ├── PCA Components:     30
-├── Epochs:             (see training_summary.txt)
+├── Epochs:             100
 ├── Parameters:         145,374
 ├── PCA Explained Var:  99.99%
 ├── Training Time:      ~3 minutes (RTX 2060S)
@@ -249,6 +255,8 @@ Training Info:
 - **Heston, S.L. (1993)**: "A Closed-Form Solution for Options with Stochastic Volatility"
 - **Carr, P., & Madan, D. (1999)**: "Option valuation using the fast Fourier transform"
 - **Ruf, J., & Wang, W. (2019)**: "Neural networks for option pricing and hedging"
+- **Rosenbaum, M., & Zhang, J. (2021)**: "Deep calibration of the quadratic rough Heston model"
+- **Bolfake, A., Mousavi, S. N., & Mashayekhi, S. (2023)**: "Deep learning for option pricing under Heston and Bates models"
 - See more in `references/`
 
 ### Mathematical Foundation
