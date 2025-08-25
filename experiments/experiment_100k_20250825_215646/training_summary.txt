@@ -1,0 +1,23 @@
+QRH Training Summary
+============================
+Dataset: data/raw/data_100k
+Dataset size: 100k
+Model parameters: 145,374
+Training epochs: 100
+Batch size: 256
+Learning rate: 0.001
+PCA components: 30
+PCA explained variance: 0.999914
+Architecture: 8 ResBlocks × 128 units
+Final validation loss: 0.003343
+Test R² score: 0.998068
+Test RMSE: 0.026050
+Test MAE: 0.006485
+
+Bucket-wise RMSE:
+  overall: 0.026050
+  atm: 0.025809
+  otm_put: 0.028796
+  otm_call: 0.023855
+  short_tenor: 0.030924
+  long_tenor: 0.020023

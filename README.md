@@ -29,14 +29,13 @@ Instead of complex FFT computation, the model directly predicts implied volatili
 │   └── processed/       
 │
 ├── experiments/         # Training results, checkpoints, PCA info, summary
-│   └── advanced_qrh_... # Each training run (auto-generated)
+│   └── experiments_...  # Each training run (auto-generated)
 │
-├── notebooks/           # Jupyter notebooks for exploratory analysis (if any)
+├── notebooks/           # Jupyter notebooks for exploratory analysis
 │
-├── reports/
-│   ├── evaluation/      # Evaluation results, IV surface comparison plots
-│   └── tensorboard/     # TensorBoard logs for training
-│
+├── reports/             # Model results
+│└── experiments_...     # Each valuation (auto-generated)
+
 ├── references/          # Reference papers, manuals
 │
 ├── scripts/
@@ -47,7 +46,6 @@ Instead of complex FFT computation, the model directly predicts implied volatili
 │   ├── model_architectures.py
 │   ├── data_gen.py
 │   ├── converter.py
-│   └── training_utils.py
 │
 ├── tests/               # Unit tests for main modules
 │
@@ -112,22 +110,9 @@ Helps the model focus on improving the OTM Put region (usually the hardest).
 
 ### `src/data_gen.py`
 **Function**: Generate synthetic Heston data
-- Randomly sample parameters from realistic ranges
-- Compute IV surface using FFT (ground truth)
-- Normalize input/output
-
-### `src/training_utils.py`
-**Function**: Training utilities
-- `create_training_callbacks()`: EarlyStopping, ModelCheckpoint, ReduceLROnPlateau, TensorBoard
-- Random seed setup, GPU configuration
 
 ### `scripts/training.py`
 **Full pipeline**:
-1. Load data (modular or npz format)
-2. Fit PCA on IV surface
-3. Transform targets to PCA space
-4. Build and compile model with advanced loss
-5. Training with callbacks
 6. Save model, weights, PCA info, summary
 
 ### `scripts/evaluation.py`
